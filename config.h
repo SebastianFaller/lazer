@@ -1,8 +1,16 @@
 /*
  * TARGET: GENERIC, AMD64
  * Architecture target.
+ * Auto-selected: AMD64 on x86-64, GENERIC elsewhere (e.g. aarch64).
+ * Define LAZER_PORTABLE to force GENERIC on x86-64.
  */
+#ifndef TARGET
+#if defined(__x86_64__) && !defined(LAZER_PORTABLE)
 #define TARGET TARGET_AMD64
+#else
+#define TARGET TARGET_GENERIC
+#endif
+#endif
 
 /*
  * RNG: SHAKE128, AES256CTR

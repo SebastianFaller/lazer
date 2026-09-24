@@ -1,9 +1,29 @@
-CFLAGS_FALCON_AMD64 = -DFALCON_FPNATIVE -DFALCON_AVX2 -DFALCON_FMA
+# target architecture: x86_64 uses AVX2/AVX-512/AES-NI code paths,
+# everything else (e.g. aarch64 on Raspberry Pi 4) uses portable code.
+# PORTABLE=1 forces the portable code paths on x86_64 (for testing).
+ARCH := $(shell uname -m)
+ifeq ($(ARCH),x86_64)
+ifneq ($(PORTABLE),1)
+X86_NATIVE = 1
+endif
+endif
+
+# target cpu flags, e.g. MARCH="-mcpu=cortex-a72" when cross-compiling
+# for a Raspberry Pi 4
+MARCH ?= -march=native -mtune=native
+
+ifdef X86_NATIVE
+CFLAGS_FALCON = -DFALCON_FPNATIVE -DFALCON_AVX2 -DFALCON_FMA
+else
+CFLAGS_FALCON = -DFALCON_FPNATIVE
+endif
 CFLAGS_WARN = -Wall -Wextra
-CFLAGS_DEFAULT = $(CFLAGS_WARN) -O3 -g -march=native -mtune=native\
- -fomit-frame-pointer
+CFLAGS_DEFAULT = $(CFLAGS_WARN) -O3 -g $(MARCH) -fomit-frame-pointer
 CFLAGS_DEBUG = $(CFLAGS_WARN) -Og -ggdb3
 ADD_CPPFLAGS = -DNDEBUG
+ifeq ($(PORTABLE),1)
+ADD_CPPFLAGS += -DLAZER_PORTABLE
+endif
 
 CPPFLAGS += $(ADD_CPPFLAGS)
 LIBS = -lm $(HEXL_DIR)/build/hexl/lib64/libhexl.a -lstdc++
@@ -17,7 +37,7 @@ buildstr = debug
 CFLAGS = $(CFLAGS_DEBUG)
 else
 buildstr = default
-CFLAGS = $(CFLAGS_DEFAULT) $(CFLAGS_FALCON_AMD64) # XXX
+CFLAGS = $(CFLAGS_DEFAULT) $(CFLAGS_FALCON)
 endif
 endif
 
@@ -173,13 +193,35 @@ $(FALCON_DIR)/vrfy_shared.o: $(FALCON_DIR)/vrfy.c $(FALCON_DIR)/config.h $(FALCO
 HEXL_SUBDIR = hexl-development
 HEXL_DIR = $(THIRD_PARTY_DIR)/$(HEXL_SUBDIR)
 HEXL_ZIP = $(HEXL_DIR).zip
+# extra cmake flags, e.g. -DCMAKE_TOOLCHAIN_FILE=... when cross-compiling
+HEXL_CMAKE_FLAGS ?=
 
+ifdef X86_NATIVE
 $(HEXL_DIR): $(HEXL_ZIP)
 	cd $(THIRD_PARTY_DIR) && unzip $(HEXL_SUBDIR).zip
 	cd $(HEXL_DIR) && cmake -S . -B build -DHEXL_BENCHMARK=OFF -DHEXL_TESTING=OFF
 	cd $(HEXL_DIR) && cmake --build build
+else
+# non-x86: src/hexl.patch makes HEXL build without x86 cpu_features and
+# uses its native (non-AVX-512) kernels
+$(HEXL_DIR): $(HEXL_ZIP) src/hexl.patch
+	cd $(THIRD_PARTY_DIR) && unzip $(HEXL_SUBDIR).zip
+	patch -d $(HEXL_DIR) -p1 < src/hexl.patch
+	cd $(HEXL_DIR) && cmake -S . -B build -DHEXL_BENCHMARK=OFF -DHEXL_TESTING=OFF -DCMAKE_INSTALL_LIBDIR=lib64 $(HEXL_CMAKE_FLAGS)
+	cd $(HEXL_DIR) && cmake --build build
+endif
 #	cd $(HEXL_DIR) && cmake -S . -B build -DHEXL_SHARED_LIB=ON
 #	cd $(HEXL_DIR) && cmake --build build
+
+#### third party simde (AVX-512 emulation for labrador on non-x86)
+
+SIMDE_SUBDIR = simde-d4d85e3
+SIMDE_DIR = $(THIRD_PARTY_DIR)/$(SIMDE_SUBDIR)
+SIMDE_ZIP = $(SIMDE_DIR).zip
+
+$(SIMDE_DIR): $(SIMDE_ZIP)
+	cd $(THIRD_PARTY_DIR) && unzip -q $(SIMDE_SUBDIR).zip
+	touch $(SIMDE_DIR)
 
 #### lib hash 
 
@@ -200,8 +242,23 @@ libhexl_wrapper.so: $(HASH_DIR)/src/hexl_wrapper.cpp $(HEXL_DIR) src/hexl_shared
 
 LABRADOR_CFLAGS = -std=gnu2x -Wall -Wextra -Wmissing-prototypes -Wredundant-decls \
   -Wshadow -Wpointer-arith -Wno-unused-function -fmax-errors=1 -flto=auto \
-  -fwrapv -ffast-math -march=native -mtune=native -O3 -DNDEBUG -fvisibility=hidden
+  -fwrapv -ffast-math $(MARCH) -O3 -DNDEBUG -fvisibility=hidden
+ifdef X86_NATIVE
 LABRADOR_LIBS = -lmvec -lm
+LABRADOR_DEPS =
+else
+LABRADOR_LIBS = -lm
+# libmvec (glibc vector math) is not available on every architecture
+ifneq ($(wildcard $(shell $(CC) -print-file-name=libmvec.so)),)
+LABRADOR_LIBS += -lmvec
+endif
+LABRADOR_DEPS = $(SIMDE_DIR)
+LABRADOR_CFLAGS += -I$(SIMDE_DIR) -DSIMDE_ENABLE_NATIVE_ALIASES \
+ -Werror=implicit-function-declaration
+ifeq ($(PORTABLE),1)
+LABRADOR_CFLAGS += -DLAZER_PORTABLE -DSIMDE_NO_NATIVE
+endif
+endif
 
 LABRADOR_DIR = src/labrados
 LABRADOR_INC = \
@@ -228,7 +285,9 @@ LABRADOR_INC = \
 	$(LABRADOR_DIR)/rejection.h \
 	$(LABRADOR_DIR)/malloc.h \
 	$(LABRADOR_DIR)/labrados_python.h \
-	$(LABRADOR_DIR)/timing.h
+	$(LABRADOR_DIR)/timing.h \
+	$(LABRADOR_DIR)/simd.h \
+	src/aes-ct64.h
 LABRADOR_SRC = \
 	$(LABRADOR_DIR)/aesctr.c \
 	$(LABRADOR_DIR)/comkey.c \
@@ -255,13 +314,13 @@ LABRADOR_SRC = \
 	$(LABRADOR_DIR)/labrados_python.c \
 	$(LABRADOR_DIR)/timing.c
 
-liblabrador32.so: $(LABRADOR_SRC) $(LABRADOR_INC)
+liblabrador32.so: $(LABRADOR_SRC) $(LABRADOR_INC) $(LABRADOR_DEPS)
 	$(CC) $(LABRADOR_CFLAGS) -I$(LABRADOR_DIR) -DLOGQ=32 -shared -fvisibility=hidden -fPIC -o liblabrador32.so $(LABRADOR_SRC) $(LABRADOR_LIBS)
 
-liblabrador36.so: $(LABRADOR_SRC) $(LABRADOR_INC)
+liblabrador36.so: $(LABRADOR_SRC) $(LABRADOR_INC) $(LABRADOR_DEPS)
 	$(CC) $(LABRADOR_CFLAGS) -I$(LABRADOR_DIR) -DLOGQ=36 -shared -fvisibility=hidden -fPIC -o liblabrador36.so $(LABRADOR_SRC) $(LABRADOR_LIBS)
 
-liblabrador38.so: $(LABRADOR_SRC) $(LABRADOR_INC)
+liblabrador38.so: $(LABRADOR_SRC) $(LABRADOR_INC) $(LABRADOR_DEPS)
 	$(CC) $(LABRADOR_CFLAGS) -I$(LABRADOR_DIR) -DLOGQ=38 -shared -fvisibility=hidden -fPIC -o liblabrador38.so $(LABRADOR_SRC) $(LABRADOR_LIBS)
 
 
@@ -273,6 +332,7 @@ LIBSOURCES = \
  src/aes256ctr.h \
  src/aes256ctr.c \
  src/aes256ctr-amd64.c \
+ src/aes-ct64.h \
  src/blindsig-p1-params.h \
  src/blindsig-p2-params.h \
  src/blindsig.h \
@@ -397,6 +457,12 @@ lazer.h: src/lazer-in1.h src/lazer-in2.h src/moduli.h config.h
 	echo "#ifndef LAZER_CONFIG_H" >> lazer.h
 	echo "#define LAZER_CONFIG_H" >> lazer.h
 	echo "" >> lazer.h
+ifeq ($(PORTABLE),1)
+	echo "#ifndef LAZER_PORTABLE" >> lazer.h
+	echo "#define LAZER_PORTABLE" >> lazer.h
+	echo "#endif" >> lazer.h
+	echo "" >> lazer.h
+endif
 	cat config.h >> lazer.h
 	echo "" >> lazer.h
 	echo "#endif" >> lazer.h
@@ -524,5 +590,6 @@ clean:
 	cd src/labrados && rm -f *.o
 	cd $(THIRD_PARTY_DIR) && rm -rf $(FALCON_SUBDIR)
 	cd $(THIRD_PARTY_DIR) && rm -rf $(HEXL_SUBDIR)
+	cd $(THIRD_PARTY_DIR) && rm -rf $(SIMDE_SUBDIR)
 	cd tests && rm -f *.o *.dSYM && cd .. && rm -f $(TESTS) && rm -f sage-test.sage.py
 

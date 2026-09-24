@@ -156,12 +156,31 @@ int_mod (int_t r, const int_t a, const int_t m)
     }
   else
     {
+#if defined(__aarch64__)
+      unsigned int mnlimbs;
+
+      /* mpn_sec_div_r requires a nonzero most significant divisor limb
+       * and only defines the low mnlimbs limbs of the remainder.
+       * (x86-64 gmp happened to work anyway, aarch64 gmp does not.) */
+      for (mnlimbs = m->nlimbs; mnlimbs > 1 && m->limbs[mnlimbs - 1] == 0;
+           mnlimbs--)
+        ;
+
+      limb_t scratch[mpn_sec_div_r_itch (a->nlimbs, mnlimbs)];
+      limb_t tmp[a->nlimbs];
+
+      limbs_cpy (tmp, a->limbs, a->nlimbs);
+      mpn_sec_div_r (tmp, a->nlimbs, m->limbs, mnlimbs, scratch);
+      limbs_cpy (r->limbs, tmp, mnlimbs);
+      limbs_set (r->limbs + mnlimbs, 0, r->nlimbs - mnlimbs);
+#else
       limb_t scratch[mpn_sec_div_r_itch (a->nlimbs, m->nlimbs)];
       limb_t tmp[a->nlimbs];
 
       limbs_cpy (tmp, a->limbs, a->nlimbs);
       mpn_sec_div_r (tmp, a->nlimbs, m->limbs, m->nlimbs, scratch);
       limbs_cpy (r->limbs, tmp, r->nlimbs);
+#endif
       r->neg = a->neg;
     }
 }

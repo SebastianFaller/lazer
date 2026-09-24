@@ -186,9 +186,9 @@ typedef const shake128_state_struct *shake128_state_srcptr;
 typedef struct
 {
 #if TARGET == TARGET_GENERIC
-  uint8_t expanded[4][60];
+  uint64_t sk_exp[120]; /* bitsliced AES-256 round keys */
   uint8_t nonce[16];
-  uint8_t cache[16];
+  uint8_t cache[4 * 16]; /* 4 blocks per bitsliced call */
   uint8_t *cache_ptr;
   unsigned int nbytes;
 #elif TARGET == TARGET_AMD64
@@ -218,6 +218,10 @@ typedef struct
 typedef rng_state_struct rng_state_t[1];
 typedef rng_state_struct *rng_state_ptr;
 typedef const rng_state_struct *rng_state_srcptr;
+
+#ifndef __SIZEOF_INT128__
+#error "lazer requires a 64-bit target with __int128 support (e.g. x86-64, aarch64)."
+#endif
 
 typedef uint64_t limb_t; /* XXX must match mp_limbt_t */
 typedef int64_t crtcoeff_t;
@@ -2018,7 +2022,7 @@ _get_coeffvec (poly_t poly)
   return poly->coeffs;
 }
 
-#ifndef _OS_IOS
+#if TARGET == TARGET_AMD64 && !defined(_OS_IOS)
 #include <immintrin.h>
 #include <x86intrin.h>
 #endif
@@ -2064,8 +2068,18 @@ _addcarry_u64_ (unsigned char c, unsigned long long x, unsigned long long y,
 
   *p = __builtin_addcll (x, y, c, &cout);
   return cout;
-#else
+#elif TARGET == TARGET_AMD64
   return _addcarry_u64 (c, x, y, p);
+#else
+  /* portable (e.g. aarch64): branch-free carry propagation.
+   * p usually points to limb_t (unsigned long), so store via memcpy
+   * to not violate strict aliasing. */
+  unsigned long long s = x + y, r;
+  unsigned char c1 = s < x;
+
+  r = s + c;
+  memcpy (p, &r, sizeof (r));
+  return c1 | (r < s);
 #endif
 }
 
@@ -2078,8 +2092,17 @@ _subborrow_u64_ (unsigned char c, unsigned long long x, unsigned long long y,
 
   *p = __builtin_subcll (x, y, c, &cout);
   return cout;
-#else
+#elif TARGET == TARGET_AMD64
   return _subborrow_u64 (c, x, y, p);
+#else
+  /* portable (e.g. aarch64): branch-free borrow propagation,
+   * store via memcpy as above */
+  unsigned long long d = x - y, r;
+  unsigned char b1 = x < y;
+
+  r = d - c;
+  memcpy (p, &r, sizeof (r));
+  return b1 | (d < c);
 #endif
 }
 

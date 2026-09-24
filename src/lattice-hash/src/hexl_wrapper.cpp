@@ -4,7 +4,9 @@
 #include <unordered_map>
 #include <memory>
 #include <utility>
+#if defined(__x86_64__)
 #include <immintrin.h>
+#endif
 
 class NTTCache {
 public:

@@ -1,9 +1,16 @@
 #ifndef LABRADOR48_PY_H
 #define LABRADOR48_PY_H
 
+#if defined(__x86_64__)
 #include <immintrin.h>
+#endif
 #include <stddef.h>
 #include <stdint.h>
+#if !defined(__x86_64__) && !defined(LABRADOS_M512I_DEFINED)
+#define LABRADOS_M512I_DEFINED
+/* layout-compatible stand-in for __m512i on non-x86 targets */
+typedef struct { int64_t q[8]; } __attribute__((aligned(64))) __m512i;
+#endif
 
 #define LABRADOR48_N 64
 #define LABRADOR48_K 8

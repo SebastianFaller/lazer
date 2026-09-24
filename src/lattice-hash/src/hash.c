@@ -3,7 +3,9 @@
 #include <string.h>
 #include <assert.h>
 #include <math.h>
+#ifdef __AVX512F__
 #include <immintrin.h>
+#endif
 
 #include "hash.h"
 #include "data.h"
@@ -83,6 +85,11 @@ static inline uint64_t shoup_mul_prime(uint64_t x, uint64_t W, uint64_t W_shoup)
     return r;
 }
 
+/*
+ * Without AVX-512 (e.g. aarch64): portable versions of the AVX-512 helpers
+ * below, with the same names and results.
+ */
+#ifdef __AVX512F__
 // AVX-512: split 8 polynomials' low byte into 8 separate bit-plane polynomials.
 // Destroys 'image'.
 static inline void decompose_bits_8_avx512(poly512 image_decomposed[8], poly512 image) {
@@ -122,6 +129,26 @@ static inline void center_lift_split_8bit_avx512(poly512 image, signed_poly512 c
         _mm512_storeu_si512((__m512i*)&cutoff[i], q);
     }
 }
+#else
+// Portable version of decompose_bits_8_avx512.
+static inline void decompose_bits_8_avx512(poly512 image_decomposed[8], poly512 image) {
+    for (int i = 0; i < 8; ++i) {
+        for (int j = 0; j < DEGREE; ++j) {
+            image_decomposed[i][j] = (image[j] >> i) & 1;
+        }
+    }
+}
+
+// Portable version of center_lift_split_8bit_avx512.
+static inline void center_lift_split_8bit_avx512(poly512 image, signed_poly512 cutoff, const poly512 output) {
+    for (int i = 0; i < DEGREE; ++i) {
+        int64_t v = (int64_t)output[i];
+        int64_t s = v > (int64_t)(PRIME / 2) ? v - (int64_t)PRIME : v;
+        image[i] = (uint64_t)(s & 0xFF);
+        cutoff[i] = s >> 8;
+    }
+}
+#endif
 
 // Compute output += sum(MATRIX_A_NTT[offset+i] * input[i]) for i in [0, count),
 // where all multiplications are polynomial multiplications via NTT.
@@ -248,6 +275,7 @@ void mix_257(poly512 image_decomposed[9], signed_poly512 cutoff, poly512 input[8
         cutoff[i] = signed_quotient;
     }
     // Decompose 9 bit-planes (values in [0, 256], bit 8 can be set) with AVX-512.
+#ifdef __AVX512F__
     {
         const __m512i one = _mm512_set1_epi64(1);
         for (int j = 0; j < DEGREE; j += 8) {
@@ -258,6 +286,13 @@ void mix_257(poly512 image_decomposed[9], signed_poly512 cutoff, poly512 input[8
             }
         }
     }
+#else
+    for (int i = 0; i < 9; ++i) {
+        for (int j = 0; j < DEGREE; ++j) {
+            image_decomposed[i][j] = (image[j] >> i) & 1;
+        }
+    }
+#endif
 }
 
 // Squeeze function based on Learning with Rounding.
@@ -286,6 +321,7 @@ void squeeze(poly512 image_decomposed[8], signed_poly512 cutoff, poly512 input[2
     // remainder is in [0, 255] but the balanced representation needs [-2, 253].
     // For remainder in {254, 255}, the balanced value is {-2, -1}, which
     // belongs to the next quotient block, so we bump the quotient by 1.
+#ifdef __AVX512F__
     {
         const __m512i vprime = _mm512_set1_epi64((int64_t)PRIME);
         const __m512i vhalf = _mm512_set1_epi64((int64_t)(PRIME / 2));
@@ -304,6 +340,15 @@ void squeeze(poly512 image_decomposed[8], signed_poly512 cutoff, poly512 input[2
             _mm512_storeu_si512((__m512i*)&cutoff[i], q);
         }
     }
+#else
+    for (int i = 0; i < DEGREE; ++i) {
+        int64_t v = (int64_t)output[i];
+        int64_t s = v > (int64_t)(PRIME / 2) ? v - (int64_t)PRIME : v;
+        int64_t r = s & 0xFF;
+        image[i] = (uint64_t)r;
+        cutoff[i] = (s >> 8) + (r > 253);
+    }
+#endif
 
     // Standard binary decomposition of image[j] (in [0, 255]) into 8 bit-planes.
     decompose_bits_8_avx512(image_decomposed, image);

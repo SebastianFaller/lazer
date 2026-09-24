@@ -7,6 +7,13 @@
 #if RNG == RNG_AES256CTR
 #if TARGET == TARGET_GENERIC
 
+/*
+ * Portable constant-time AES-256-CTR (bitsliced, 4 blocks in parallel),
+ * based on BearSSL's aes_ct64, see aes-ct64.h.
+ */
+
+#include "aes-ct64.h"
+
 static inline void
 incbe (uint8_t n[16])
 {
@@ -21,158 +28,132 @@ incbe (uint8_t n[16])
     }
 }
 
-static unsigned char
-multiply (unsigned int c, unsigned int d)
-{
-  unsigned char f[8];
-  unsigned char g[8];
-  unsigned char h[15];
-  unsigned char result;
-  int i;
-  int j;
-
-  for (i = 0; i < 8; ++i)
-    f[i] = 1 & (c >> i);
-  for (i = 0; i < 8; ++i)
-    g[i] = 1 & (d >> i);
-  for (i = 0; i < 15; ++i)
-    h[i] = 0;
-  for (i = 0; i < 8; ++i)
-    for (j = 0; j < 8; ++j)
-      h[i + j] ^= f[i] & g[j];
-
-  for (i = 6; i >= 0; --i)
-    {
-      h[i + 0] ^= h[i + 8];
-      h[i + 1] ^= h[i + 8];
-      h[i + 3] ^= h[i + 8];
-      h[i + 4] ^= h[i + 8];
-      h[i + 8] ^= h[i + 8];
-    }
-
-  result = 0;
-  for (i = 0; i < 8; ++i)
-    result |= h[i] << i;
-  return result;
-}
-
-static unsigned char
-square (unsigned char c)
-{
-  return multiply (c, c);
-}
-
-static unsigned char
-xtime (unsigned char c)
-{
-  return multiply (c, 2);
-}
-
-static unsigned char
-bytesub (unsigned char c)
-{
-  unsigned char c3 = multiply (square (c), c);
-  unsigned char c7 = multiply (square (c3), c);
-  unsigned char c63 = multiply (square (square (square (c7))), c7);
-  unsigned char c127 = multiply (square (c63), c);
-  unsigned char c254 = square (c127);
-  unsigned char f[8];
-  unsigned char h[8];
-  unsigned char result;
-  int i;
-
-  for (i = 0; i < 8; ++i)
-    f[i] = 1 & (c254 >> i);
-  h[0] = f[0] ^ f[4] ^ f[5] ^ f[6] ^ f[7] ^ 1;
-  h[1] = f[1] ^ f[5] ^ f[6] ^ f[7] ^ f[0] ^ 1;
-  h[2] = f[2] ^ f[6] ^ f[7] ^ f[0] ^ f[1];
-  h[3] = f[3] ^ f[7] ^ f[0] ^ f[1] ^ f[2];
-  h[4] = f[4] ^ f[0] ^ f[1] ^ f[2] ^ f[3];
-  h[5] = f[5] ^ f[1] ^ f[2] ^ f[3] ^ f[4] ^ 1;
-  h[6] = f[6] ^ f[2] ^ f[3] ^ f[4] ^ f[5] ^ 1;
-  h[7] = f[7] ^ f[3] ^ f[4] ^ f[5] ^ f[6];
-  result = 0;
-  for (i = 0; i < 8; ++i)
-    result |= h[i] << i;
-  return result;
-}
-
+/* AES-256 key schedule, output in expanded bitsliced form (120 words) */
 static void
-aes256 (aes256ctr_state_t state, unsigned char *out, const unsigned char *in)
+_aes_ct64_keysched256 (uint64_t sk_exp[120], const uint8_t key[32])
 {
-  unsigned char _state[4][4];
-  unsigned char new_state[4][4];
-  int i, j, r;
+  static const uint8_t rcon[]
+      = { 0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x1B, 0x36 };
+  const int nk = 8, nkf = 60;
+  uint32_t skey[60], tmp;
+  uint64_t comp_skey[30];
+  int i, j, k;
 
-  for (j = 0; j < 4; ++j)
-    for (i = 0; i < 4; ++i)
-      _state[i][j] = in[j * 4 + i] ^ state->expanded[i][j];
-
-  for (r = 0; r < 14; ++r)
+  for (i = 0; i < nk; i++)
+    skey[i] = _aes_dec32le (key + 4 * i);
+  tmp = skey[nk - 1];
+  for (i = nk, j = 0, k = 0; i < nkf; i++)
     {
-      for (i = 0; i < 4; ++i)
-        for (j = 0; j < 4; ++j)
-          new_state[i][j] = bytesub (_state[i][j]);
-      for (i = 0; i < 4; ++i)
-        for (j = 0; j < 4; ++j)
-          _state[i][j] = new_state[i][(j + i) % 4];
-      if (r < 13)
-        for (j = 0; j < 4; ++j)
-          {
-            unsigned char a0 = _state[0][j];
-            unsigned char a1 = _state[1][j];
-            unsigned char a2 = _state[2][j];
-            unsigned char a3 = _state[3][j];
-            _state[0][j] = xtime (a0 ^ a1) ^ a1 ^ a2 ^ a3;
-            _state[1][j] = xtime (a1 ^ a2) ^ a2 ^ a3 ^ a0;
-            _state[2][j] = xtime (a2 ^ a3) ^ a3 ^ a0 ^ a1;
-            _state[3][j] = xtime (a3 ^ a0) ^ a0 ^ a1 ^ a2;
-          }
-      for (i = 0; i < 4; ++i)
-        for (j = 0; j < 4; ++j)
-          _state[i][j] ^= state->expanded[i][r * 4 + 4 + j];
+      if (j == 0)
+        {
+          tmp = (tmp << 24) | (tmp >> 8);
+          tmp = _aes_ct64_sub_word (tmp) ^ rcon[k];
+        }
+      else if (j == 4)
+        {
+          tmp = _aes_ct64_sub_word (tmp);
+        }
+      tmp ^= skey[i - nk];
+      skey[i] = tmp;
+      if (++j == nk)
+        {
+          j = 0;
+          k++;
+        }
     }
 
-  for (j = 0; j < 4; ++j)
-    for (i = 0; i < 4; ++i)
-      out[j * 4 + i] = _state[i][j];
+  for (i = 0, j = 0; i < nkf; i += 4, j += 2)
+    {
+      uint64_t q[8];
+
+      _aes_ct64_interleave_in (&q[0], &q[4], skey + i);
+      q[1] = q[0];
+      q[2] = q[0];
+      q[3] = q[0];
+      q[5] = q[4];
+      q[6] = q[4];
+      q[7] = q[4];
+      _aes_ct64_ortho (q);
+      comp_skey[j + 0] = (q[0] & (uint64_t)0x1111111111111111)
+                         | (q[1] & (uint64_t)0x2222222222222222)
+                         | (q[2] & (uint64_t)0x4444444444444444)
+                         | (q[3] & (uint64_t)0x8888888888888888);
+      comp_skey[j + 1] = (q[4] & (uint64_t)0x1111111111111111)
+                         | (q[5] & (uint64_t)0x2222222222222222)
+                         | (q[6] & (uint64_t)0x4444444444444444)
+                         | (q[7] & (uint64_t)0x8888888888888888);
+    }
+
+  for (i = 0, j = 0; i < 30; i++, j += 4)
+    {
+      uint64_t x0, x1, x2, x3;
+
+      x0 = x1 = x2 = x3 = comp_skey[i];
+      x0 &= (uint64_t)0x1111111111111111;
+      x1 &= (uint64_t)0x2222222222222222;
+      x2 &= (uint64_t)0x4444444444444444;
+      x3 &= (uint64_t)0x8888888888888888;
+      x1 >>= 1;
+      x2 >>= 2;
+      x3 >>= 3;
+      sk_exp[j + 0] = (x0 << 4) - x0;
+      sk_exp[j + 1] = (x1 << 4) - x1;
+      sk_exp[j + 2] = (x2 << 4) - x2;
+      sk_exp[j + 3] = (x3 << 4) - x3;
+    }
+
+  explicit_bzero (skey, sizeof (skey));
+  explicit_bzero (comp_skey, sizeof (comp_skey));
+}
+
+/* encrypt the next 4 counter blocks into out[64], advance the counter */
+static void
+_aes256ctr_4blocks (aes256ctr_state_t state, uint8_t out[64])
+{
+  const uint64_t *sk = state->sk_exp;
+  uint32_t w[16];
+  uint64_t q[8];
+  unsigned int i;
+
+  for (i = 0; i < 4; i++)
+    {
+      w[4 * i + 0] = _aes_dec32le (state->nonce + 0);
+      w[4 * i + 1] = _aes_dec32le (state->nonce + 4);
+      w[4 * i + 2] = _aes_dec32le (state->nonce + 8);
+      w[4 * i + 3] = _aes_dec32le (state->nonce + 12);
+      incbe (state->nonce);
+    }
+  for (i = 0; i < 4; i++)
+    _aes_ct64_interleave_in (&q[i], &q[i + 4], w + (i << 2));
+  _aes_ct64_ortho (q);
+
+  _aes_ct64_add_round_key (q, sk);
+  for (i = 1; i < 14; i++)
+    {
+      _aes_ct64_bitslice_sbox (q);
+      _aes_ct64_shift_rows (q);
+      _aes_ct64_mix_columns (q);
+      _aes_ct64_add_round_key (q, sk + (i << 3));
+    }
+  _aes_ct64_bitslice_sbox (q);
+  _aes_ct64_shift_rows (q);
+  _aes_ct64_add_round_key (q, sk + (14 << 3));
+
+  _aes_ct64_ortho (q);
+  for (i = 0; i < 4; i++)
+    _aes_ct64_interleave_out (w + (i << 2), q[i], q[i + 4]);
+  for (i = 0; i < 16; i++)
+    _aes_enc32le (out + 4 * i, w[i]);
 }
 
 static void
 _aes256ctr_init (aes256ctr_state_t state, const uint8_t key[32],
                  const uint8_t nonce[16])
 {
-  unsigned char roundconstant;
-  int i, j;
-
   state->cache_ptr = NULL;
   state->nbytes = 0;
   memcpy (state->nonce, nonce, 16);
-
-  for (j = 0; j < 8; ++j)
-    for (i = 0; i < 4; ++i)
-      state->expanded[i][j] = key[j * 4 + i];
-
-  roundconstant = 1;
-  for (j = 8; j < 60; ++j)
-    {
-      unsigned char temp[4];
-      if (j % 4)
-        for (i = 0; i < 4; ++i)
-          temp[i] = state->expanded[i][j - 1];
-      else if (j % 8)
-        for (i = 0; i < 4; ++i)
-          temp[i] = bytesub (state->expanded[i][j - 1]);
-      else
-        {
-          for (i = 0; i < 4; ++i)
-            temp[i] = bytesub (state->expanded[(i + 1) % 4][j - 1]);
-          temp[0] ^= roundconstant;
-          roundconstant = xtime (roundconstant);
-        }
-      for (i = 0; i < 4; ++i)
-        state->expanded[i][j] = temp[i] ^ state->expanded[i][j - 8];
-    }
+  _aes_ct64_keysched256 (state->sk_exp, key);
 }
 
 static void
@@ -189,23 +170,21 @@ _aes256ctr_stream (aes256ctr_state_t state, uint8_t *out, size_t outlen)
   out += len;
   outlen -= len;
 
-  while (outlen >= 16)
+  while (outlen >= 64)
     {
-      aes256 (state, out, state->nonce);
-      incbe (state->nonce);
+      _aes256ctr_4blocks (state, out);
 
-      out += 16;
-      outlen -= 16;
+      out += 64;
+      outlen -= 64;
     }
   if (outlen > 0)
     {
-      aes256 (state, state->cache, state->nonce);
-      incbe (state->nonce);
+      _aes256ctr_4blocks (state, state->cache);
 
       memcpy (out, state->cache, outlen);
 
       state->cache_ptr = state->cache + outlen;
-      state->nbytes = 16 - outlen;
+      state->nbytes = 64 - outlen;
     }
 }
 

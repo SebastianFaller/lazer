@@ -30,6 +30,35 @@ Note that during compilation, the cpu_features package
 will be cloned from GitHub, so also git and an internet
 connection are required.
 
+### ARM64 (e.g. Raspberry Pi 4)
+
+lazer also builds on 64-bit ARM Linux (aarch64, e.g. 64-bit Raspberry Pi OS
+or Ubuntu arm64); 32-bit ARM is not supported. The architecture is detected
+automatically: on non-x86 targets lazer uses portable C code paths (a
+constant-time bitsliced AES instead of AES-NI, no AVX2 in Falcon, HEXL's
+native kernels), and labrador's AVX-512 code is emulated with
+[SIMDe](https://github.com/simd-everywhere/simde), which is shipped in
+`third_party` and unpacked by make. The RNG output, and hence proofs, are
+identical to the x86-64 build, but everything runs considerably slower.
+
+    sudo apt install build-essential cmake git unzip libgmp-dev libmpfr-dev \
+                     python3-dev python3-cffi valgrind
+    make clean
+    make all
+    make check
+
+On x86-64, `make PORTABLE=1 ...` forces the portable code paths, which is
+useful for testing them on a development machine.
+
+Building on the Pi itself is slow; the library can also be cross-compiled
+on a PC, e.g. with an aarch64 gcc and a CMake toolchain file for HEXL:
+
+    make ARCH=aarch64 CC=aarch64-linux-gnu-gcc CXX=aarch64-linux-gnu-g++ \
+         MARCH=-mcpu=cortex-a72+nocrypto \
+         HEXL_CMAKE_FLAGS=-DCMAKE_TOOLCHAIN_FILE=/path/to/aarch64.cmake all
+
+(`+nocrypto`: the Pi 4's BCM2711 has no ARMv8 crypto extensions.)
+
 
 Building the library
 --------------------

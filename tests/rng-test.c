@@ -43,6 +43,12 @@ const char seedstr[]
 const char domstr[] = "001CC5B751A51D70";
 const char streamstr[] = "913cd4d68a9feed715e3bd37489e266f8a3c490cefe47e14bbde"
                          "6ade9317f9619c99e38a";
+/* 4096+16 byte stream from seed2/dom2 (see below): bytes 4080..4111 and
+ * shake128 digest of the whole stream */
+const char streamstr2_tail[] = "ee277be85974263757e7107eefdbb8ab"
+                               "a35c5e1b07cccbd9cb2988a063dee80c";
+const char streamstr2_shake[] = "2ffcd03e4d0fdaccbf73ce69e8b90972"
+                                "5dda55d4a36968102efcb90f888c1eef";
 
 int
 main (void)
@@ -74,6 +80,45 @@ main (void)
   TEST_EXPECT (memcmp (out, stream, sizeof (stream)) == 0);
 
   rng_clear (state);
+
+  /* longer stream in odd-sized chunks: checks that the generic and the
+   * amd64 (AES-NI) implementations produce identical output across
+   * block and batch boundaries. */
+  {
+    uint8_t seed2[32], buf[4096 + 16], tail[32], h[32], hexp[32];
+    shake128_state_t hstate;
+    size_t off = 0, n = 1, k;
+    int i;
+
+    for (i = 0; i < 32; i++)
+      seed2[i] = (uint8_t)(i * 7 + 3);
+
+    test_hexstr2buf (tail, &len, streamstr2_tail);
+    TEST_ASSERT (len == 32);
+    test_hexstr2buf (hexp, &len, streamstr2_shake);
+    TEST_ASSERT (len == 32);
+
+    rng_init (state, seed2, 0x0123456789abcdefULL);
+    while (off < sizeof (buf))
+      {
+        k = n;
+        if (k > sizeof (buf) - off)
+          k = sizeof (buf) - off;
+        rng_urandom (state, buf + off, k);
+        off += k;
+        n = (n * 5 + 3) % 301 + 1;
+      }
+    rng_clear (state);
+
+    TEST_EXPECT (memcmp (buf + 4096 - 16, tail, 32) == 0);
+
+    shake128_init (hstate);
+    shake128_absorb (hstate, buf, sizeof (buf));
+    shake128_squeeze (hstate, h, 32);
+    shake128_clear (hstate);
+    TEST_EXPECT (memcmp (h, hexp, 32) == 0);
+  }
+
   TEST_PASS ();
 }
 
