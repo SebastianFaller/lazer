@@ -48,6 +48,10 @@ lazer_init (void)
     {
       lazer_init = 1;
 
+#ifdef LAZER_AARCH64
+      _modpre_tables_init ();
+#endif
+
       for (i = 0; i < NMODULI_D64; i++)
         {
           hexl_ntt_d64[i] = hexl_ntt_alloc (64, moduli_d64[i]->p);

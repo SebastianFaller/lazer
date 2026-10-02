@@ -4,10 +4,50 @@
 #include "intvec.h"
 #include "lazer.h"
 #include "memory.h"
+#ifdef LAZER_AARCH64
+#include "modred.h"
+#endif /* LAZER_AARCH64 */
 // #include "ntt.h"
 #include "urandom.h"
 #include <math.h>
 
+#ifdef LAZER_AARCH64
+/* reciprocals of the CRT moduli for _modpre_*, filled by lazer_init () */
+static _modpre_t _modpre_d64[NMODULI_D64];
+static _modpre_t _modpre_d128[NMODULI_D128];
+
+static void
+_modpre_tables_init (void)
+{
+  unsigned int i;
+
+  for (i = 0; i < NMODULI_D64; i++)
+    _modpre_init (&_modpre_d64[i], (uint64_t)moduli_d64[i]->p);
+  for (i = 0; i < NMODULI_D128; i++)
+    _modpre_init (&_modpre_d128[i], (uint64_t)moduli_d128[i]->p);
+}
+
+/* reciprocal of the i-th crt modulus of ring (table lookup, or tmp) */
+static inline const _modpre_t *
+_modpre_crt (polyring_srcptr ring, unsigned int i, _modpre_t *tmp)
+{
+  const uint64_t p = (uint64_t)ring->moduli[i]->p;
+  const _modpre_t *pre = NULL;
+
+  if (ring->d == 64 && i < NMODULI_D64)
+    pre = &_modpre_d64[i];
+  else if (ring->d == 128 && i < NMODULI_D128)
+    pre = &_modpre_d128[i];
+
+  if (pre == NULL || pre->m != p)
+    {
+      _modpre_init (tmp, p);
+      pre = tmp;
+    }
+  return pre;
+}
+
+#endif /* LAZER_AARCH64 */
 void
 poly_alloc (poly_ptr r, const polyring_t ring)
 {
@@ -632,11 +672,24 @@ poly_tocrt (poly_t r)
 #else
     // XXX
     unsigned int j;
+#ifdef LAZER_AARCH64
+    _modpre_t pretmp;
+    const _modpre_t *pre = _modpre_crt (ring, i, &pretmp);
+    ASSERT_ERR (ring->moduli[i]->p > 0);
+#endif /* LAZER_AARCH64 */
     for (j = 0; j < deg; j++)
       {
         crtcoeff = _get_crtcoeff (crtrep, i, j, deg);
         int_ptr coeff = intvec_get_elem (coeffs, j);
+#ifndef LAZER_AARCH64
         *crtcoeff = int_mod_XXX_hexl (coeff, ring->moduli[i]->p);
+#else /* LAZER_AARCH64 */
+        /* == int_mod_XXX_hexl (coeff, ring->moduli[i]->p), branch-free */
+        *crtcoeff = (crtcoeff_t)_modpre_int_mod_hexl (
+            pre, coeff->limbs, coeff->nlimbs, coeff->neg);
+        ASSERT_ERR ((uint64_t)*crtcoeff
+                    == int_mod_XXX_hexl (coeff, ring->moduli[i]->p));
+#endif /* LAZER_AARCH64 */
       }
     crtcoeff = _get_crtcoeff (crtrep, i, 0, deg);
     // XXX
@@ -671,6 +724,10 @@ poly_fromcrt (poly_t r)
   unsigned int i, j;
   float z;
   long round_z;
+#ifdef LAZER_AARCH64
+  _modpre_t pretmp[s];
+  const _modpre_t *pre[s];
+#endif /* LAZER_AARCH64 */
 
   if (ring->Ppmodq != NULL)
     {
@@ -685,11 +742,26 @@ poly_fromcrt (poly_t r)
       INT_T (tmp1, ring->q->nlimbs * 2);
 #endif
 
+#ifdef LAZER_AARCH64
+      _modpre_t qpre;
+      const int qpre_ok = (mod->nlimbs == 1 && coeffs->nlimbs == 1
+                           && (int64_t)mod->limbs[0] > 0);
+      if (qpre_ok)
+        _modpre_init (&qpre, mod->limbs[0]);
+#endif
+
       DEBUG_PRINTF (DEBUG_PRINT_FROMCRT, "icrt %p", (void *)r);
 
       crtmod = ring->moduli[s - 1];
       hexl_ntts = (deg == 64 ? hexl_ntt_d64 : hexl_ntt_d128);
 
+#ifdef LAZER_AARCH64
+      _POLYRING_FOREACH_P (ring, i)
+      {
+        pre[i] = _modpre_crt (ring, i, &pretmp[i]);
+      }
+
+#endif
       _POLYRING_FOREACH_P (ring, i)
       {
         crtcoeff = _get_crtcoeff (crtrep, i, 0, deg);
@@ -724,8 +796,20 @@ poly_fromcrt (poly_t r)
           //   *crtcoeff += p;
           //  XXX
 
+#ifndef LAZER_AARCH64
           x = ((crtcoeff_dbl_t)crtmod->k[i] * (*crtcoeff))
               % p; // XXX in (-p,p)
+#else /* LAZER_AARCH64 */
+          /* == ((crtcoeff_dbl_t)k[i] * (*crtcoeff)) % p, branch-free.
+           * |k[i]| <= (p-1)/2 so |k[i]*c| < p*2^63 for any int64 c. */
+          ASSERT_ERR (crtmod->k[i] <= (p - 1) / 2
+                      && crtmod->k[i] >= -((p - 1) / 2));
+          x = _modpre_srem (pre[i],
+                            (crtcoeff_dbl_t)crtmod->k[i] * (*crtcoeff));
+          ASSERT_ERR (x
+                      == ((crtcoeff_dbl_t)crtmod->k[i] * (*crtcoeff)) % p);
+          // XXX in (-p,p)
+#endif /* LAZER_AARCH64 */
                    // XXX
                    // if (x > (p - 1) / 2)
                    //  x -= p;
@@ -760,7 +844,20 @@ poly_fromcrt (poly_t r)
         int_redc (coeff, coeff, mod);
 #else
         int_set (tmp1, Pz);
+#ifndef LAZER_AARCH64
         int_mod (coeff, tmp1, mod);
+#else /* LAZER_AARCH64 */
+        if (qpre_ok)
+          {
+            /* == int_mod (coeff, tmp1, mod) for 1-limb mod < 2^63 */
+            int_set_i64 (coeff, _modpre_int_mod (&qpre, tmp1->limbs,
+                                                 tmp1->nlimbs, tmp1->neg));
+          }
+        else
+          {
+            int_mod (coeff, tmp1, mod);
+          }
+#endif /* LAZER_AARCH64 */
         int_redc (coeff, coeff, mod);
 #endif
       }
@@ -788,6 +885,13 @@ poly_fromcrt (poly_t r)
       crtmod = ring->moduli[s - 1];
       hexl_ntts = (deg == 64 ? hexl_ntt_d64 : hexl_ntt_d128);
 
+#ifdef LAZER_AARCH64
+      _POLYRING_FOREACH_P (ring, i)
+      {
+        pre[i] = _modpre_crt (ring, i, &pretmp[i]);
+      }
+
+#endif
       _POLYRING_FOREACH_P (ring, i)
       {
         crtcoeff = _get_crtcoeff (crtrep, i, 0, deg);
@@ -822,8 +926,20 @@ poly_fromcrt (poly_t r)
           //   *crtcoeff += p;
           //  XXX
 
+#ifndef LAZER_AARCH64
           x = ((crtcoeff_dbl_t)crtmod->k[i] * (*crtcoeff))
               % p; // XXX in (-p,p)
+#else /* LAZER_AARCH64 */
+          /* == ((crtcoeff_dbl_t)k[i] * (*crtcoeff)) % p, branch-free.
+           * |k[i]| <= (p-1)/2 so |k[i]*c| < p*2^63 for any int64 c. */
+          ASSERT_ERR (crtmod->k[i] <= (p - 1) / 2
+                      && crtmod->k[i] >= -((p - 1) / 2));
+          x = _modpre_srem (pre[i],
+                            (crtcoeff_dbl_t)crtmod->k[i] * (*crtcoeff));
+          ASSERT_ERR (x
+                      == ((crtcoeff_dbl_t)crtmod->k[i] * (*crtcoeff)) % p);
+          // XXX in (-p,p)
+#endif /* LAZER_AARCH64 */
                    // XXX
                    // if (x > (p - 1) / 2)
                    //  x -= p;

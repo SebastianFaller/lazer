@@ -2,6 +2,9 @@
 #include "brandom.h"
 #include "grandom.h"
 #include "lazer.h"
+#ifdef LAZER_AARCH64
+#include "modred.h"
+#endif
 #include "memory.h"
 #include "urandom.h"
 
@@ -344,6 +347,24 @@ intvec_mod (intvec_t r, const intvec_t a, const int_t m)
   unsigned int i;
 
   ASSERT_ERR (r->nlimbs == m->nlimbs);
+#ifdef LAZER_AARCH64
+
+  if (m->nlimbs == 1 && (int64_t)m->limbs[0] > 0)
+    {
+      /* == int_mod () elementwise, reciprocal of m computed once */
+      _modpre_t pre;
+      int_srcptr ai;
+
+      _modpre_init (&pre, m->limbs[0]);
+      _VEC_FOREACH_ELEM (r, i)
+      {
+        ai = intvec_get_elem_src (a, i);
+        int_set_i64 (intvec_get_elem (r, i),
+                     _modpre_int_mod (&pre, ai->limbs, ai->nlimbs, ai->neg));
+      }
+      return;
+    }
+#endif /* LAZER_AARCH64 */
 
   _VEC_FOREACH_ELEM (r, i)
   {

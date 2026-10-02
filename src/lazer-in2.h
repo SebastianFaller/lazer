@@ -183,9 +183,18 @@ typedef shake128_state_struct shake128_state_t[1];
 typedef shake128_state_struct *shake128_state_ptr;
 typedef const shake128_state_struct *shake128_state_srcptr;
 
+/*
+ * LAZER_AARCH64 enables the aarch64-specific code paths (docs/RPI4.md). It is
+ * never defined on x86-64, where the original code is compiled unchanged.
+ * -DLAZER_NO_AARCH64 compiles the original code on aarch64 too (used by the
+ * equivalence tests).
+ */
+#if defined(__aarch64__) && !defined(LAZER_NO_AARCH64)
+#define LAZER_AARCH64 1
+#endif
+
 /* aarch64 NEON bitsliced AES (no AES hardware needed), see aes-neonbs.h */
-#if TARGET == TARGET_GENERIC && defined(__aarch64__) && defined(__ARM_NEON) \
-    && !defined(LAZER_AES_NO_NEON)
+#if TARGET == TARGET_GENERIC && defined(LAZER_AARCH64) && defined(__ARM_NEON)
 #define LAZER_AES_NEONBS 1
 #endif
 
