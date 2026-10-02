@@ -1,4 +1,4 @@
 [submodule "src/labrados"]
 	path = src/labrados
 	url = ../labrador.git
-	branch = rpi4-optimizations
+	branch = rpi4-chacha

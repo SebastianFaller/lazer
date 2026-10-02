@@ -6,6 +6,7 @@
 
 #define RNG_SHAKE128 0
 #define RNG_AES256CTR 1
+#define RNG_CHACHA20 2
 
 #define ASSERT_DISABLED 0
 #define ASSERT_ENABLED 1

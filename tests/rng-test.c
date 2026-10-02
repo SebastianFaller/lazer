@@ -1,6 +1,6 @@
 #include "test.h"
 
-#if RNG == RNG_SHAKE128RNG
+#if RNG == RNG_SHAKE128
 const char seedstr[]
     = "22c1fd7342356b0a1a0ef75e7346c2df8a76148407f7f1132e47ed9d59ae4147";
 const char domstr[] = "a6211d51ed664050";
@@ -117,6 +117,83 @@ main (void)
     shake128_squeeze (hstate, h, 32);
     shake128_clear (hstate);
     TEST_EXPECT (memcmp (h, hexp, 32) == 0);
+  }
+
+  TEST_PASS ();
+}
+
+#elif RNG == RNG_CHACHA20
+/*
+ * rng(seed, dom) is RFC 8439 ChaCha20 with key = seed,
+ * nonce = 00000000 || le64(dom), counter starting at 0.
+ * RFC 8439 2.4.2: key 00..1f, nonce 000000000000004a00000000, counter 1,
+ * so dom = 0x4a000000 and the RFC keystream starts at byte 64.
+ */
+const char seedstr[]
+    = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
+const char ptstr[]
+    = "Ladies and Gentlemen of the class of '99: If I could offer you only "
+      "one tip for the future, sunscreen would be it.";
+const char ctstr[]
+    = "6e2e359a2568f98041ba0728dd0d6981e97e7aec1d4360c20a27afccfd9fae0b"
+      "f91b65c5524733ab8f593dabcd62b3571639d624e65152ab8f530c359f0861d8"
+      "07ca0dbf500d6a6156a38e088a22b65e52bc514d16ccf806818ce91ab7793736"
+      "5af90bbf74a35be6b40b8eedf2785e42874d";
+
+int
+main (void)
+{
+  uint8_t seed[32], out[64 + 114], ct[114];
+  rng_state_t state;
+  size_t len, i;
+
+  lazer_init ();
+
+  test_hexstr2buf (seed, &len, seedstr);
+  TEST_ASSERT (len == 32);
+  test_hexstr2buf (ct, &len, ctstr);
+  TEST_ASSERT (len == 114);
+
+  rng_init (state, seed, 0x4a000000ULL);
+  rng_urandom (state, out, 10);
+  rng_urandom (state, out + 10, 60);
+  rng_urandom (state, out + 70, sizeof (out) - 70);
+  rng_clear (state);
+
+  for (i = 0; i < 114; i++)
+    out[64 + i] ^= (uint8_t)ptstr[i];
+  TEST_EXPECT (memcmp (out + 64, ct, 114) == 0);
+
+  /* odd-sized chunks across cache/batch boundaries == one-shot stream */
+  {
+    uint8_t seed2[32], buf[4096 + 16], ref[4096 + 16];
+    size_t off = 0, n = 1, k;
+
+    for (i = 0; i < 32; i++)
+      seed2[i] = (uint8_t)(i * 7 + 3);
+
+    rng_init (state, seed2, 0x0123456789abcdefULL);
+    rng_urandom (state, ref, sizeof (ref));
+    rng_clear (state);
+
+    rng_init (state, seed2, 0x0123456789abcdefULL);
+    while (off < sizeof (buf))
+      {
+        k = n;
+        if (k > sizeof (buf) - off)
+          k = sizeof (buf) - off;
+        rng_urandom (state, buf + off, k);
+        off += k;
+        n = (n * 5 + 3) % 301 + 1;
+      }
+    rng_clear (state);
+    TEST_EXPECT (memcmp (buf, ref, sizeof (buf)) == 0);
+
+    /* different dom gives a different stream */
+    rng_init (state, seed2, 0x0123456789abcdeeULL);
+    rng_urandom (state, buf, sizeof (buf));
+    rng_clear (state);
+    TEST_EXPECT (memcmp (buf, ref, sizeof (buf)) != 0);
   }
 
   TEST_PASS ();

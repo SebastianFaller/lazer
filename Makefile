@@ -25,6 +25,21 @@ ifeq ($(PORTABLE),1)
 ADD_CPPFLAGS += -DLAZER_PORTABLE
 endif
 
+# PRG selection (transcript-breaking, see config.h):
+#   make RNG=CHACHA20      lazer core RNG (SHAKE128, AES256CTR, CHACHA20;
+#                          the RNG_ prefix is optional). Default: config.h.
+#   make LAB_PRG=CHACHA20  labrador(s) PRG behind the aes128ctr_* API
+#                          (default: AES-128-CTR).
+ifdef RNG
+LAZER_RNG_OPT = RNG_$(patsubst RNG_%,%,$(RNG))
+endif
+LAZER_CONFIG_STR = RNG=$(LAZER_RNG_OPT) PORTABLE=$(PORTABLE)
+# rewritten only when the configuration changes, forces lazer.h rebuild
+.lazer-config: FORCE
+	@echo '$(LAZER_CONFIG_STR)' | cmp -s - $@ || echo '$(LAZER_CONFIG_STR)' > $@
+.PHONY: FORCE
+FORCE:
+
 CPPFLAGS += $(ADD_CPPFLAGS)
 LIBS = -lm $(HEXL_DIR)/build/hexl/lib64/libhexl.a -lstdc++
 
@@ -249,10 +264,17 @@ ifeq ($(PORTABLE),1)
 LABRADOR_CFLAGS += -DLAZER_PORTABLE -DSIMDE_NO_NATIVE
 endif
 endif
+ifdef LAB_PRG
+LABRADOR_CFLAGS += -DLAB_PRG_$(patsubst LAB_PRG_%,%,$(LAB_PRG))
+endif
+LABRADOR_DEPS += .lazer-labprg-config
+.lazer-labprg-config: FORCE
+	@echo 'LAB_PRG=$(LAB_PRG)' | cmp -s - $@ || echo 'LAB_PRG=$(LAB_PRG)' > $@
 
 LABRADOR_DIR = src/labrados
 LABRADOR_INC = \
 	$(LABRADOR_DIR)/aesctr.h \
+	src/chacha20.h \
 	$(LABRADOR_DIR)/comkey.h \
 	$(LABRADOR_DIR)/constraints.h\
 	$(LABRADOR_DIR)/cpucycles.h \
@@ -327,6 +349,7 @@ LIBSOURCES = \
  src/aes256ctr-amd64.c \
  src/aes-ct64.h \
  src/aes-neonbs.h \
+ src/chacha20.h \
  src/blindsig-p1-params.h \
  src/blindsig-p2-params.h \
  src/blindsig.h \
@@ -446,7 +469,7 @@ src/hexl_static.o: src/hexl.h $(HEXL_DIR)
 src/hexl_shared.o: src/hexl.h $(HEXL_DIR)
 	$(CXX) $(CPPFLAGS) $(CFLAGS) -Isrc -I$(HEXL_DIR)/hexl/include -c -fPIC -o src/hexl_shared.o src/hexl.cpp
 
-lazer.h: src/lazer-in1.h src/lazer-in2.h src/moduli.h config.h
+lazer.h: src/lazer-in1.h src/lazer-in2.h src/moduli.h config.h .lazer-config
 	cat src/lazer-in1.h > lazer.h
 	echo "" >> lazer.h
 
@@ -457,6 +480,10 @@ ifeq ($(PORTABLE),1)
 	echo "#ifndef LAZER_PORTABLE" >> lazer.h
 	echo "#define LAZER_PORTABLE" >> lazer.h
 	echo "#endif" >> lazer.h
+	echo "" >> lazer.h
+endif
+ifdef LAZER_RNG_OPT
+	echo "#define RNG $(LAZER_RNG_OPT)" >> lazer.h
 	echo "" >> lazer.h
 endif
 	cat config.h >> lazer.h
@@ -580,6 +607,7 @@ doc/html/index.html: $(TEXSOURCES) doc/pdf/lazer_manual.pdf # rely on latexmk fo
 
 .PHONY: html
 clean:
+	rm -f .lazer-config .lazer-labprg-config
 	rm -f lazer.h liblazer.a liblazer.so liblabrador.a liblabrador.so  liblabrador32.so  liblabrador36.so  liblabrador38.so  libhash.so libhexl_wrapper.so
 	cd scripts && rm -f moduli.sage.py lnp-codegen.sage.py abdlop-codegen.sage.py lnp-quad-codegen.sage.py lnp-quad-eval-codegen.sage.py lnp-tbox-codegen.sage.py lin-codegen.sage.py
 	cd src && rm -f *.o

@@ -1,4 +1,6 @@
 lazer.h
+.lazer-config
+.lazer-labprg-config
 *.a
 *.so
 

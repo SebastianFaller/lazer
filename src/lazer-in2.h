@@ -219,10 +219,23 @@ typedef const aes256ctr_state_struct *aes256ctr_state_srcptr;
 
 typedef struct
 {
+  uint32_t input[16];   /* chacha20 state: constants, key, ctr, nonce */
+  uint8_t cache[4 * 64]; /* 4 blocks per (NEON) call */
+  uint8_t *cache_ptr;
+  unsigned int nbytes;
+} chacha20_state_struct;
+typedef chacha20_state_struct chacha20_state_t[1];
+typedef chacha20_state_struct *chacha20_state_ptr;
+typedef const chacha20_state_struct *chacha20_state_srcptr;
+
+typedef struct
+{
 #if RNG == RNG_SHAKE128
   shake128_state_t state;
 #elif RNG == RNG_AES256CTR
   aes256ctr_state_t state;
+#elif RNG == RNG_CHACHA20
+  chacha20_state_t state;
 #else
 #error "Invalid rng option."
 #endif

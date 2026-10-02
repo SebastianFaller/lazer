@@ -13,10 +13,21 @@
 #endif
 
 /*
- * RNG: SHAKE128, AES256CTR
- * Use Shake128 or AES-256-CTR for pseudorandom generation.
+ * RNG: SHAKE128, AES256CTR, CHACHA20
+ * Use Shake128, AES-256-CTR or ChaCha20 for pseudorandom generation.
+ * The choice changes all derived randomness (public parameters,
+ * challenges, ...), so proofs are only interoperable between builds
+ * using the same RNG.
+ * Can be overridden without editing this file: `make RNG=CHACHA20`
+ * (bakes the choice into the generated lazer.h) or -DLAZER_RNG=RNG_CHACHA20.
  */
+#ifndef RNG
+#ifdef LAZER_RNG
+#define RNG LAZER_RNG
+#else
 #define RNG RNG_AES256CTR
+#endif
+#endif
 
 /*
  * ASSERT: ENABLED, DISABLED
