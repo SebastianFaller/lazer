@@ -1,3 +1,4 @@
+#include "modred.h"
 #include "brandom.h"
 #include "grandom.h"
 #include "lazer.h"
@@ -151,7 +152,21 @@ int_mod (int_t r, const int_t a, const int_t m)
   if (m->nlimbs == 1)
     {
       const crtcoeff_t mod = (crtcoeff_t)m->limbs[0];
-      crtcoeff_t x = int_mod_XXX (a, mod);
+      crtcoeff_t x;
+
+      if (mod > 0)
+        {
+          /* == int_mod_XXX (a, mod), branch-free (no __modti3) */
+          _modpre_t pre;
+
+          _modpre_init (&pre, (uint64_t)mod);
+          x = _modpre_int_mod (&pre, a->limbs, a->nlimbs, a->neg);
+          ASSERT_ERR (x == int_mod_XXX (a, mod));
+        }
+      else
+        {
+          x = int_mod_XXX (a, mod);
+        }
       int_set_i64 (r, x);
     }
   else

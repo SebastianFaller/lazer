@@ -354,6 +354,7 @@ LIBSOURCES = \
  src/lnp-tbox.c \
  src/memory.c \
  src/memory.h \
+ src/modred.h \
  src/mont.h \
  src/poly.h \
  src/poly.c \
@@ -372,7 +373,8 @@ LIBSOURCES = \
  src/stopwatch.c \
  src/urandom.h \
  src/urandom.c \
- src/version.c
+ src/version.c \
+ src/vr_accum.h
 
 #src/ntt.c \
 #src/ntt.h \

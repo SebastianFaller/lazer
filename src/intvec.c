@@ -1,3 +1,4 @@
+#include "modred.h"
 #include "intvec.h"
 #include "brandom.h"
 #include "grandom.h"
@@ -344,6 +345,22 @@ intvec_mod (intvec_t r, const intvec_t a, const int_t m)
   unsigned int i;
 
   ASSERT_ERR (r->nlimbs == m->nlimbs);
+
+  if (m->nlimbs == 1 && (int64_t)m->limbs[0] > 0)
+    {
+      /* == int_mod () elementwise, reciprocal of m computed once */
+      _modpre_t pre;
+      int_srcptr ai;
+
+      _modpre_init (&pre, m->limbs[0]);
+      _VEC_FOREACH_ELEM (r, i)
+      {
+        ai = intvec_get_elem_src (a, i);
+        int_set_i64 (intvec_get_elem (r, i),
+                     _modpre_int_mod (&pre, ai->limbs, ai->nlimbs, ai->neg));
+      }
+      return;
+    }
 
   _VEC_FOREACH_ELEM (r, i)
   {

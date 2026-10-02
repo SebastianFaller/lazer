@@ -1,6 +1,8 @@
 #include "lazer.h"
 #include "lnp-tbox.h"
 #include "memory.h"
+#include "modred.h"
+#include "vr_accum.h"
 
 #if DEBUGINFO == DEBUGINFO_ENABLED
 #if 0
@@ -1993,7 +1995,9 @@ ___schwartz_zippel_accumulate (spolymat_ptr R2i, spolyvec_ptr r1i,
 
   if (Rprime2i != NULL)
     {
-      spolymat_set (t0, R2i);
+      /* ping-pong between t0 and t2 instead of copying R2i and the
+       * partial sums (identical result, fewer poly_set copies) */
+      spolymat_ptr src = R2i, dst = t0;
       for (j = 0; j < M; j++)
         {
           if (Rprime2i[j] == NULL)
@@ -2002,17 +2006,23 @@ ___schwartz_zippel_accumulate (spolymat_ptr R2i, spolyvec_ptr r1i,
           spolymat_fromcrt (Rprime2i[j]);
 
           spolymat_scale (t1, intvec_get_elem (v, j), Rprime2i[j]);
-          spolymat_add (t2, t0, t1, 0);
-          spolymat_set (t0, t2);
+          spolymat_add (dst, src, t1, 0);
+          src = dst;
+          dst = (dst == t0 ? t2 : t0);
         }
-      spolymat_mod (R2i, t0);
+      if (src == R2i)
+        {
+          spolymat_set (t0, R2i);
+          src = t0;
+        }
+      spolymat_mod (R2i, src);
     }
 
   /* r1i */
 
   if (rprime1i != NULL)
     {
-      spolyvec_set (u0, r1i);
+      spolyvec_ptr src = r1i, dst = u0;
       for (j = 0; j < M; j++)
         {
           if (rprime1i[j] == NULL)
@@ -2021,10 +2031,16 @@ ___schwartz_zippel_accumulate (spolymat_ptr R2i, spolyvec_ptr r1i,
           spolyvec_fromcrt (rprime1i[j]);
 
           spolyvec_scale (u1, intvec_get_elem (v, j), rprime1i[j]);
-          spolyvec_add (u2, u0, u1, 0);
-          spolyvec_set (u0, u2);
+          spolyvec_add (dst, src, u1, 0);
+          src = dst;
+          dst = (dst == u0 ? u2 : u0);
         }
-      spolyvec_mod (r1i, u0);
+      if (src == r1i)
+        {
+          spolyvec_set (u0, r1i);
+          src = u0;
+        }
+      spolyvec_mod (r1i, src);
     }
 
   if (rprime0i != NULL && r0i != NULL)
@@ -2059,7 +2075,9 @@ ___schwartz_zippel_accumulate_ (spolymat_ptr R2i, spolyvec_ptr r1i,
 
   if (Rprime2i != NULL)
     {
-      spolymat_set (t0, R2i);
+      /* ping-pong between t0 and t2 instead of copying R2i and the
+       * partial sums (identical result, fewer poly_set copies) */
+      spolymat_ptr src = R2i, dst = t0;
       for (j = 0; j < M; j++)
         {
           if (Rprime2i[j] == NULL)
@@ -2067,17 +2085,23 @@ ___schwartz_zippel_accumulate_ (spolymat_ptr R2i, spolyvec_ptr r1i,
 
           spolymat_fromcrt (Rprime2i[j]);
 
-          spolymat_add (t2, t0, Rprime2i[j], 0);
-          spolymat_set (t0, t2);
+          spolymat_add (dst, src, Rprime2i[j], 0);
+          src = dst;
+          dst = (dst == t0 ? t2 : t0);
         }
-      spolymat_mod (R2i, t0);
+      if (src == R2i)
+        {
+          spolymat_set (t0, R2i);
+          src = t0;
+        }
+      spolymat_mod (R2i, src);
     }
 
   /* r1i */
 
   if (rprime1i != NULL)
     {
-      spolyvec_set (u0, r1i);
+      spolyvec_ptr src = r1i, dst = u0;
       for (j = 0; j < M; j++)
         {
           if (rprime1i[j] == NULL)
@@ -2085,10 +2109,16 @@ ___schwartz_zippel_accumulate_ (spolymat_ptr R2i, spolyvec_ptr r1i,
 
           spolyvec_fromcrt (rprime1i[j]);
 
-          spolyvec_add (u2, u0, rprime1i[j], 0);
-          spolyvec_set (u0, u2);
+          spolyvec_add (dst, src, rprime1i[j], 0);
+          src = dst;
+          dst = (dst == u0 ? u2 : u0);
         }
-      spolyvec_mod (r1i, u0);
+      if (src == r1i)
+        {
+          spolyvec_set (u0, r1i);
+          src = u0;
+        }
+      spolyvec_mod (r1i, src);
     }
 
   if (r0i != NULL && rprime0i != NULL)
@@ -2792,6 +2822,66 @@ ___schwartz_zippel_accumulate_l2 (
   polyvec_free (tmp_polyvec);
 }
 
+/*
+ * Fast path for vR = V*R (mod q) in ___schwartz_zippel_accumulate_z3/z4:
+ * usable if 256 * max|V[k][i]| < 2^63 (int64 sums are then exact) and
+ * 0 < q < 2^63 (for _modpre_srem). Data are public (V, R from the
+ * challenge seed).
+ */
+static int
+___vR_fast (intmat_t V, unsigned int lambda, limb_t sq)
+{
+  unsigned int i, k;
+  int_srcptr chal;
+
+  if (sq == 0 || (sq >> 63) != 0)
+    return 0;
+  for (k = 0; k < lambda; k++)
+    {
+      for (i = 0; i < 256; i++)
+        {
+          chal = intmat_get_elem (V, k, i);
+          if (chal->limbs[0] >= ((limb_t)1 << 55))
+            return 0;
+        }
+    }
+  return 1;
+}
+
+static void
+___vR_mod_fast (intmat_t vR_, intmat_t V, unsigned int lambda,
+                unsigned int ncols, limb_t sq, _vr_expand_fn expand,
+                const uint8_t seed[32])
+{
+  int64_t *S = _alloc (sizeof (int64_t) * lambda * 256);
+  int64_t *acc = _alloc (sizeof (int64_t) * lambda * ncols);
+  int8_t *Rbuf = _alloc ((size_t)VR_ICH * ncols);
+  _modpre_t pre;
+  unsigned int i, j, k;
+
+  _modpre_init (&pre, sq);
+
+  for (k = 0; k < lambda; k++)
+    for (i = 0; i < 256; i++)
+      S[k * 256 + i] = int_get_i64 (intmat_get_elem (V, k, i));
+
+  _vr_accum (acc, S, 256, lambda, ncols, Rbuf, expand, seed);
+
+  for (k = 0; k < lambda; k++)
+    {
+      for (j = 0; j < ncols; j++)
+        {
+          /* == (__int128)acc % (__int128)sq */
+          int_set_i64 (intmat_get_elem (vR_, k, j),
+                       _modpre_srem (&pre, acc[(size_t)j * lambda + k]));
+        }
+    }
+
+  _free (Rbuf, (size_t)VR_ICH * ncols);
+  _free (acc, sizeof (int64_t) * lambda * ncols);
+  _free (S, sizeof (int64_t) * lambda * 256);
+}
+
 static void
 ___schwartz_zippel_accumulate_z4 (
     spolymat_ptr R2i[], spolyvec_ptr r1i[], poly_ptr r0i[],
@@ -2825,7 +2915,7 @@ ___schwartz_zippel_accumulate_z4 (
   spolyvec_ptr r1tptr[1];
   poly_ptr r0tptr[1];
   int_ptr chal, acc;
-  polymat_t mat, vRDs, vRDm, vRpol;
+  polymat_t vRDs, vRDm, vRpol;
   polyvec_t subv1, subv2;
   int_ptr coeff1, coeff2;
   poly_ptr poly, poly2, poly3;
@@ -2841,7 +2931,8 @@ ___schwartz_zippel_accumulate_z4 (
   INTVEC_T (vRu, lambda, 2 * Rq->q->nlimbs);
   intmat_urandom (V, q, log2q, seed, dom);
 
-  polymat_alloc (mat, Rq, nprime, MAX (m1, l));
+  /* (unused scratch matrix "mat" no longer allocated: it was never
+   * read or written, but cost nex*max(m1,l) poly headers per call) */
   polymat_alloc (vRpol, Rq, lambda, nprime);
   polymat_alloc (vRDs, Rq, lambda, m1);
   if (l > 0)
@@ -2875,7 +2966,13 @@ ___schwartz_zippel_accumulate_z4 (
         }
     }
 
-  if (Rq->q->nlimbs == 1 && 1) // XXX add condition on q
+  if (Rq->q->nlimbs == 1 && ___vR_fast (V, lambda, Rq->q->limbs[0]))
+    {
+      /* same result as the __int128 path below, see vr_accum.h */
+      ___vR_mod_fast (vR_, V, lambda, nprime * d, Rq->q->limbs[0], __expand_Rprime_i,
+                      seed);
+    }
+  else if (Rq->q->nlimbs == 1 && 1) // XXX add condition on q
     {
       const limb_t sq = Rq->q->limbs[0];
       __int128 svR[lambda * nprime * d];
@@ -3163,7 +3260,6 @@ ___schwartz_zippel_accumulate_z4 (
   if (l > 0)
     polymat_free (vRDm);
   polymat_free (vRpol);
-  polymat_free (mat);
 }
 
 static void
@@ -3204,7 +3300,7 @@ ___schwartz_zippel_accumulate_z3 (
   spolyvec_ptr r1tptr[1];
   poly_ptr r0tptr[1];
   int_ptr chal, acc;
-  polymat_t mat, vRpol;
+  polymat_t vRpol;
   spolymat_t vRPs;
   polyvec_t subv1;
   int_ptr coeff1, coeff2;
@@ -3245,7 +3341,8 @@ ___schwartz_zippel_accumulate_z3 (
   // printf ("V:\n");
   // intmat_dump (V);
 
-  polymat_alloc (mat, Rq, nex, MAX (m1, l));
+  /* (unused scratch matrix "mat" no longer allocated: it was never
+   * read or written, but cost nex*max(m1,l) poly headers per call) */
   polymat_alloc (vRpol, Rq, lambda, nex);
   // polymat_alloc (vRPs, Rq, lambda, m1);
   spolymat_alloc (vRPs, Rq, lambda, m1, lambda * m1);
@@ -3278,7 +3375,13 @@ ___schwartz_zippel_accumulate_z3 (
         }
     }
 
-  if (Rq->q->nlimbs == 1 && 1) // XXX add condition on q
+  if (Rq->q->nlimbs == 1 && ___vR_fast (V, lambda, Rq->q->limbs[0]))
+    {
+      /* same result as the __int128 path below, see vr_accum.h */
+      ___vR_mod_fast (vR_, V, lambda, nex * d, Rq->q->limbs[0], __expand_R_i,
+                      seed);
+    }
+  else if (Rq->q->nlimbs == 1 && 1) // XXX add condition on q
     {
       const limb_t sq = Rq->q->limbs[0];
       __int128 svR[lambda * nex * d];
@@ -3690,7 +3793,6 @@ ___schwartz_zippel_accumulate_z3 (
   // polymat_free (vRPs);
   spolymat_free (vRPs);
   polymat_free (vRpol);
-  polymat_free (mat);
   for (i = 0; i < Z; i++)
     {
       if (Es != NULL && Es[i] != NULL)
