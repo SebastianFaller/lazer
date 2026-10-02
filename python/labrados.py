@@ -39,11 +39,10 @@ def poly_to_ar(v: poly_t,outtype="int64"):
     return int64_to_type(pv,v.ring.deg,outtype)
 
 def polyvec_to_ar(v: polyvec_t,outtype="int64"):
+    # one C call instead of a per-coefficient Python copy loop; polyvec_get_coeffvec_i64
+    # is exactly poly_get_coeffvec_i64 applied to each element (lazer-in2.h)
     pvec=ffi.new("int64_t []",v.ring.deg*v.dim)
-    for i in range(v.dim):
-        temp=poly_to_ar(v.get_elem(i))
-        for j in range(v.ring.deg):
-            pvec[v.ring.deg*i+j]=temp[j]
+    lib.polyvec_get_coeffvec_i64(pvec, v.ptr)
     return int64_to_type(pvec,v.ring.deg*v.dim,outtype)
 
 def list_automorphism(pol_coeffs:list):
