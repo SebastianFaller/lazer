@@ -28,15 +28,14 @@ incbe (uint8_t n[16])
     }
 }
 
-/* AES-256 key schedule, output in expanded bitsliced form (120 words) */
+/* AES-256 key expansion into 60 little-endian 32-bit words (constant-time) */
 static void
-_aes_ct64_keysched256 (uint64_t sk_exp[120], const uint8_t key[32])
+_aes256_expand_words (uint32_t skey[60], const uint8_t key[32])
 {
   static const uint8_t rcon[]
       = { 0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x1B, 0x36 };
   const int nk = 8, nkf = 60;
-  uint32_t skey[60], tmp;
-  uint64_t comp_skey[30];
+  uint32_t tmp;
   int i, j, k;
 
   for (i = 0; i < nk; i++)
@@ -61,6 +60,139 @@ _aes_ct64_keysched256 (uint64_t sk_exp[120], const uint8_t key[32])
           k++;
         }
     }
+}
+
+#ifdef LAZER_AES_NEONBS
+
+/*
+ * NEON bitsliced AES-256-CTR (8 blocks in parallel), see aes-neonbs.h.
+ * Same output as the portable/AES-NI code below/in aes256ctr-amd64.c.
+ */
+
+#include "aes-neonbs.h"
+
+static void
+_aes256ctr_init (aes256ctr_state_t state, const uint8_t key[32],
+                 const uint8_t nonce[16])
+{
+  uint32_t skey[60];
+  uint8_t rk[15 * 16];
+  int i;
+
+  state->cache_ptr = NULL;
+  state->nbytes = 0;
+  memcpy (state->nonce, nonce, 16);
+
+  _aes256_expand_words (skey, key);
+  for (i = 0; i < 60; i++)
+    _aes_enc32le (rk + 4 * i, skey[i]);
+  _aes_nbs_expand_rks (state->sk_nbs, rk, 14);
+  explicit_bzero (skey, sizeof (skey));
+  explicit_bzero (rk, sizeof (rk));
+}
+
+static inline uint64_t
+_aes_load64be (const uint8_t *b)
+{
+  uint64_t x = 0;
+  int i;
+
+  for (i = 0; i < 8; i++)
+    x = (x << 8) | b[i];
+  return x;
+}
+
+static inline void
+_aes_store64be (uint8_t *b, uint64_t x)
+{
+  int i;
+
+  for (i = 7; i >= 0; i--)
+    {
+      b[i] = (uint8_t)x;
+      x >>= 8;
+    }
+}
+
+/*
+ * encrypt the next 8 counter blocks into out[128], advance the counter
+ * (128-bit big-endian, as incbe())
+ */
+static inline void
+_aes256ctr_8blocks (aes256ctr_state_t state, uint8_t out[128])
+{
+  uint64_t hi = _aes_load64be (state->nonce);
+  uint64_t lo = _aes_load64be (state->nonce + 8);
+  unsigned int i;
+
+  if ((lo & 7) == 0)
+    {
+      /* blocks differ only in the 3 low counter bits (public data) */
+      _aes_nbs_ctr8 (out, state->nonce, 15, state->sk_nbs, 14);
+    }
+  else
+    {
+      uint8_t ctr[128];
+
+      for (i = 0; i < 8; i++)
+        {
+          uint64_t l = lo + i, h = hi + (l < lo);
+
+          _aes_store64be (ctr + 16 * i, h);
+          _aes_store64be (ctr + 16 * i + 8, l);
+        }
+      _aes_nbs_encrypt8 (out, ctr, state->sk_nbs, 14);
+    }
+  hi += (lo + 8 < lo);
+  lo += 8;
+  _aes_store64be (state->nonce, hi);
+  _aes_store64be (state->nonce + 8, lo);
+}
+
+static void
+_aes256ctr_stream (aes256ctr_state_t state, uint8_t *out, size_t outlen)
+{
+  size_t len;
+
+  len = MIN (outlen, state->nbytes);
+  memcpy (out, state->cache_ptr, len);
+
+  state->cache_ptr += len;
+  state->nbytes -= len;
+
+  out += len;
+  outlen -= len;
+
+  while (outlen >= 128)
+    {
+      _aes256ctr_8blocks (state, out);
+
+      out += 128;
+      outlen -= 128;
+    }
+  if (outlen > 0)
+    {
+      _aes256ctr_8blocks (state, state->cache);
+
+      memcpy (out, state->cache, outlen);
+
+      state->cache_ptr = state->cache + outlen;
+      state->nbytes = 128 - outlen;
+    }
+}
+
+#else /* !LAZER_AES_NEONBS */
+
+/* AES-256 key schedule, output in expanded bitsliced form (120 words) */
+static void
+_aes_ct64_keysched256 (uint64_t sk_exp[120], const uint8_t key[32])
+{
+  const int nkf = 60;
+  uint32_t skey[60];
+  uint64_t comp_skey[30];
+  int i, j;
+
+  _aes256_expand_words (skey, key);
 
   for (i = 0, j = 0; i < nkf; i += 4, j += 2)
     {
@@ -187,6 +319,8 @@ _aes256ctr_stream (aes256ctr_state_t state, uint8_t *out, size_t outlen)
       state->nbytes = 64 - outlen;
     }
 }
+
+#endif /* LAZER_AES_NEONBS */
 
 #endif
 
