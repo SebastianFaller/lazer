@@ -85,3 +85,27 @@
  
  #include <functional>
  #include <vector>
+--- a/hexl/include/hexl/util/gcc.hpp
++++ b/hexl/include/hexl/util/gcc.hpp
+@@ -55,7 +55,8 @@
+ 
+ // Returns most-significant bit of the input
+ inline uint64_t MSB(uint64_t input) {
+-  return static_cast<uint64_t>(std::log2l(input));
++  // exact integer floor(log2(input)); avoids software quad-precision log2l on aarch64
++  return static_cast<uint64_t>(63 - __builtin_clzll(input));
+ }
+ 
+ #define HEXL_LOOP_UNROLL_4 _Pragma("GCC unroll 4")
+--- a/hexl/include/hexl/util/clang.hpp
++++ b/hexl/include/hexl/util/clang.hpp
+@@ -55,7 +55,8 @@
+ 
+ // Returns most-significant bit of the input
+ inline uint64_t MSB(uint64_t input) {
+-  return static_cast<uint64_t>(std::log2l(input));
++  // exact integer floor(log2(input)); avoids software quad-precision log2l on aarch64
++  return static_cast<uint64_t>(63 - __builtin_clzll(input));
+ }
+ 
+ #define HEXL_LOOP_UNROLL_4 _Pragma("clang loop unroll_count(4)")
