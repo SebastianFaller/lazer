@@ -277,7 +277,8 @@ LABRADOR_INC = \
 	$(LABRADOR_DIR)/labrados_python.h \
 	$(LABRADOR_DIR)/timing.h \
 	$(LABRADOR_DIR)/simd.h \
-	src/aes-ct64.h
+	src/aes-ct64.h \
+	src/aes-neonbs.h
 LABRADOR_SRC = \
 	$(LABRADOR_DIR)/aesctr.c \
 	$(LABRADOR_DIR)/comkey.c \
@@ -323,6 +324,7 @@ LIBSOURCES = \
  src/aes256ctr.c \
  src/aes256ctr-amd64.c \
  src/aes-ct64.h \
+ src/aes-neonbs.h \
  src/blindsig-p1-params.h \
  src/blindsig-p2-params.h \
  src/blindsig.h \

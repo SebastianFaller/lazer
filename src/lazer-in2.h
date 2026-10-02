@@ -183,9 +183,21 @@ typedef shake128_state_struct shake128_state_t[1];
 typedef shake128_state_struct *shake128_state_ptr;
 typedef const shake128_state_struct *shake128_state_srcptr;
 
+/* aarch64 NEON bitsliced AES (no AES hardware needed), see aes-neonbs.h */
+#if TARGET == TARGET_GENERIC && defined(__aarch64__) && defined(__ARM_NEON) \
+    && !defined(LAZER_AES_NO_NEON)
+#define LAZER_AES_NEONBS 1
+#endif
+
 typedef struct
 {
-#if TARGET == TARGET_GENERIC
+#if TARGET == TARGET_GENERIC && defined(LAZER_AES_NEONBS)
+  _ALIGN16 uint8_t sk_nbs[15 * 128]; /* bitsliced AES-256 round keys */
+  uint8_t nonce[16];
+  uint8_t cache[8 * 16]; /* 8 blocks per bitsliced call */
+  uint8_t *cache_ptr;
+  unsigned int nbytes;
+#elif TARGET == TARGET_GENERIC
   uint64_t sk_exp[120]; /* bitsliced AES-256 round keys */
   uint8_t nonce[16];
   uint8_t cache[4 * 16]; /* 4 blocks per bitsliced call */
