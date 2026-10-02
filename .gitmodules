@@ -1,4 +1,4 @@
 [submodule "src/labrados"]
 	path = src/labrados
-	url = https://github.com/zrlpol/labrador.git
-	branch = main
+	url = ../labrador.git
+	branch = rpi4-optimizations

@@ -233,8 +233,8 @@ libhexl_wrapper.so: $(HASH_DIR)/src/hexl_wrapper.cpp src/hexl_shared.o
 
 LABRADOR_CFLAGS = -std=gnu2x -Wall -Wextra -Wmissing-prototypes -Wredundant-decls \
   -Wshadow -Wpointer-arith -Wno-unused-function -fmax-errors=1 -flto=auto \
-  -fwrapv -ffast-math $(MARCH) -O3 -DNDEBUG -fvisibility=hidden
-LABRADOR_LIBS = -lm
+  -fwrapv -ffast-math $(MARCH) -O3 -DNDEBUG -fvisibility=hidden -pthread
+LABRADOR_LIBS = -lm -pthread
 # libmvec (glibc vector math) is not available on every architecture
 ifneq ($(wildcard $(shell $(CC) -print-file-name=libmvec.so)),)
 LABRADOR_LIBS += -lmvec
@@ -277,6 +277,8 @@ LABRADOR_INC = \
 	$(LABRADOR_DIR)/labrados_python.h \
 	$(LABRADOR_DIR)/timing.h \
 	$(LABRADOR_DIR)/simd.h \
+	$(LABRADOR_DIR)/simd_neon.h \
+	$(LABRADOR_DIR)/parallel.h \
 	src/aes-ct64.h \
 	src/aes-neonbs.h
 LABRADOR_SRC = \
