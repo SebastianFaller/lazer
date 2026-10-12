@@ -255,6 +255,9 @@ endif
 LABRADOR_DEPS = $(SIMDE_DIR)
 LABRADOR_CFLAGS += -I$(SIMDE_DIR) -DSIMDE_ENABLE_NATIVE_ALIASES \
  -Werror=implicit-function-declaration
+# aarch64: multi-threaded prover/verifier (labrados parallel.h)
+LABRADOR_CFLAGS += -pthread
+LABRADOR_LIBS += -pthread
 ifeq ($(PORTABLE),1)
 LABRADOR_CFLAGS += -DLAZER_PORTABLE -DSIMDE_NO_NATIVE
 endif
@@ -287,6 +290,8 @@ LABRADOR_INC = \
 	$(LABRADOR_DIR)/labrados_python.h \
 	$(LABRADOR_DIR)/timing.h \
 	$(LABRADOR_DIR)/simd.h \
+	$(LABRADOR_DIR)/simd_neon.h \
+	$(LABRADOR_DIR)/parallel.h \
 	src/aes-ct64.h \
 	src/aes-neonbs.h
 LABRADOR_SRC = \
