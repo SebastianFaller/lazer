@@ -39,7 +39,9 @@ constant-time bitsliced AES instead of AES-NI, no AVX2 in Falcon, HEXL's
 native kernels), and labrador's AVX-512 code is emulated with
 [SIMDe](https://github.com/simd-everywhere/simde), which is shipped in
 `third_party` and unpacked by make. The RNG output, and hence proofs, are
-identical to the x86-64 build, but everything runs considerably slower.
+identical to the x86-64 build. Native aarch64 code for the hot spots and a
+multi-threaded Labrador (x86-64 builds are unchanged) are described in
+[docs/RPI4.md](docs/RPI4.md).
 
     sudo apt install build-essential cmake git unzip libgmp-dev libmpfr-dev \
                      python3-dev python3-cffi valgrind
