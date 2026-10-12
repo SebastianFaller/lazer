@@ -54,6 +54,15 @@ make -C tests/aarch64 check                 # src/modred.h against C's %
 make -C src/labrados/tests/aarch64 check    # Labrador: original vs aarch64 code, byte-identical
 ```
 
+On x86-64 (or with an x86-64 cross target), check that this branch compiles
+exactly upstream's code:
+
+```sh
+git clone --recursive https://github.com/lazer-crypto/lazer.git ../lazer-upstream
+(cd ../lazer-upstream && git checkout b958e24 && git submodule update)
+scripts/check_x86_identical.sh ../lazer-upstream
+```
+
 `LAB_THREADS=<n>` sets the number of Labrador threads at run time (default 4;
 `LAB_THREADS=1` starts no threads). The number of threads does not change
 the proofs.
@@ -92,5 +101,7 @@ None of the changes adds a secret-dependent branch or memory access:
   randomness, and every message and proof was hashed. The hashes equal
   those of the build without the optimizations, for 1 and 4 threads.
 - **Threads:** ThreadSanitizer is clean.
-- **x86-64:** with the x86-64 predefined macros, the preprocessed sources equal
-  upstream's.
+- **x86-64:** `scripts/check_x86_identical.sh <upstream checkout>` preprocesses
+  every translation unit of the library (lazer, lattice-hash, labrados at LOGQ
+  32/36/38, the cffi headers; 97 in total) with x86-64 AVX-512 flags, in this
+  branch and in upstream lazer b958e24. All of them are identical.
