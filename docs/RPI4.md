@@ -45,11 +45,11 @@ equivalence tests use them to compare the two builds.
 
 ```sh
 sudo apt install build-essential cmake git unzip libgmp-dev libmpfr-dev \
-                 python3-dev python3-cffi
+                 python3-dev python3-cffi valgrind
 git clone --recursive -b rpi4 <lazer fork> lazer   # submodule URL is relative: ../labrador.git
 cd lazer
 pip install -e .        # builds liblazer.so, liblabrador38.so and the Python bindings
-make check              # lazer's tests (rng-test checks the AES keystream)
+make check              # lazer's tests (rng-test checks the AES keystream; needs valgrind)
 make -C tests/aarch64 check                 # src/modred.h against C's %
 make -C src/labrados/tests/aarch64 check    # Labrador: original vs aarch64 code, byte-identical
 ```
@@ -62,6 +62,10 @@ git clone --recursive https://github.com/lazer-crypto/lazer.git ../lazer-upstrea
 (cd ../lazer-upstream && git checkout b958e24 && git submodule update)
 scripts/check_x86_identical.sh ../lazer-upstream
 ```
+
+`abdlop-test` fails in about 1 of 10 runs (`tests/abdlop-test.c:146`, marked
+"sometimes fails" upstream). This is upstream behaviour: with fixed OS randomness
+this branch and upstream+port fail for exactly the same seeds.
 
 `LAB_THREADS=<n>` sets the number of Labrador threads at run time (default 4;
 `LAB_THREADS=1` starts no threads). The number of threads does not change
